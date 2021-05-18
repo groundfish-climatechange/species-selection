@@ -1,0 +1,118 @@
+---
+title: "Prepare Observer Data"
+author: "Owen Liu"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(here)
+library(magrittr)
+```
+
+# Purpose
+
+Clean, explore, and prepare the WGOP (observer) data for cluster analyses.
+
+# Import
+
+Import the data, obtained from Kate Richerson, May, 2021.
+
+The data came with a description file, describing the variables in the data:
+
+```{r}
+info <- read_csv(here('data','wcgop_obproc_legend_20210430.csv'),col_types = 'cc')
+knitr::kable(info)
+```
+
+And the observer data itself. It's a lot of data! But we can probably filter out a lot of variables that we do not need.
+
+```{r}
+dat <- read_csv(here('data','wcgop_obproc_20210430.csv'),
+                # we use the table above to choose only some columns to read
+                # can edit this later if we want to look at other variables
+                # we also use this call to read_csv() to indicate the column data types,
+                # to avoid parsing errors
+                col_types = cols_only(
+                  AREA = "c",
+                  AVG_DEPTH = "d",
+                  AVG_LONG = 'd',
+                  AVG_LAT = 'd',
+                  CATCH_CATEGORY_CODE = 'c',
+                  D_PORT = 'c',
+                  D_STATE = 'c',
+                  DRVID = 'c',
+                  gear = 'c',
+                  GF = 'l',
+                  GROUPING = 'c',
+                  HAUL_ID = 'd',
+                  IFQ = 'l',
+                  scientific_name = 'c',
+                  SET_YEAR = col_double(),
+                  SET_DATE = col_datetime(format = ""),
+                  SET_LAT = col_double(),
+                  SET_LONG = col_double(),
+                  SET_FISHING_AREA = col_double(),
+                  SET_DEPTH = col_double(),
+                  sector = 'c',
+                  cs_sector = 'c',
+                  TARGET = 'c',
+                  SRC = 'c',
+                  SPID_EQV= 'c',
+                  MT = 'd'
+                ))
+```
+
+# Clean Data
+
+Here, we remove empty or unidentified records. We'll keep track of how many records are removed.
+
+* Remove records with no recorded catch weight
+* Remove records with no recorded set date, latitude, or longitude
+* Remove records with no recorded haul identification number.
+
+The raw dataset after importing from `csv`, as analyzed on `r format(Sys.time(), '%d %B, %Y')`, has `r nrow(dat)` observations.
+
+## No Catch Weight
+
+```{r}
+dat_f1 <- dat %>% 
+  filter(!is.na(MT))
+```
+
+Filtering out records with no recorded catch weight (`MT`) removes `r nrow(dat)-nrow(dat_f1)` observations, or `r (nrow(dat)-nrow(dat_f1))/nrow(dat)*100` percent.
+
+## No Date, Latitude, or Longitude
+
+We filter out any records that are missing date, lat, or lon identifiers.
+
+```{r}
+dat_f2 <- dat_f1 %>% 
+  filter(!is.na(SET_DATE),
+         !is.na(SET_LONG),
+         !is.na(SET_LAT))
+```
+
+Filtering out these records removes another `r nrow(dat_f1)-nrow(dat_f2)` observations, or `r (nrow(dat_f1)-nrow(dat_f2))/nrow(dat)*100` percent of the original data.
+
+## No Haul ID
+
+We filter out any records that are missing a unique haul identification number.
+
+```{r}
+dat_f3 <- dat_f2 %>% 
+  filter(!is.na(HAUL_ID))
+```
+
+Filtering out these records removes another `r nrow(dat_f2)-nrow(dat_f3)` observations, or `r (nrow(dat_f2)-nrow(dat_f3))/nrow(dat)*100` percent of the original data. It seems that many of the observations that were missing one or more of the above variables (e.g., date) were likely to be missing others as well.
+
+# Prepare Data for Cluster Analysis
+
+Finally, we want to organize the data such that it is prepared for cluster analysis. To do this, we alter the format from "long" to "wide" format, such that each row should have a unique haul ID, and the columns should indicate the catch of each species in that haul.
