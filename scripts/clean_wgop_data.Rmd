@@ -55,6 +55,7 @@ dat <- read_csv(here('data','wcgop_obproc_20210430.csv'),
                   HAUL_ID = 'd',
                   IFQ = 'l',
                   scientific_name = 'c',
+                  species= 'c',
                   SET_YEAR = col_double(),
                   SET_DATE = col_datetime(format = ""),
                   SET_LAT = col_double(),
@@ -111,8 +112,160 @@ dat_f3 <- dat_f2 %>%
   filter(!is.na(HAUL_ID))
 ```
 
+The "thinned" data now look like this:
+
+```{r}
+glimpse(dat_f3)
+```
+
+
 Filtering out these records removes another `r nrow(dat_f2)-nrow(dat_f3)` observations, or `r (nrow(dat_f2)-nrow(dat_f3))/nrow(dat)*100` percent of the original data. It seems that many of the observations that were missing one or more of the above variables (e.g., date) were likely to be missing others as well.
+
+```{r,echo=F,include=F}
+rm(dat,dat_f1,dat_f2)
+```
 
 # Prepare Data for Cluster Analysis
 
 Finally, we want to organize the data such that it is prepared for cluster analysis. To do this, we alter the format from "long" to "wide" format, such that each row should have a unique haul ID, and the columns should indicate the catch of each species in that haul.
+
+For now, we only retain a small number of haul-level identifiers (Haul ID, date, lat/lon of set, gear type, sector). There should be `r length(unique(dat_f3$HAUL_id)` unique hauls.
+
+Later, we can pull other variables from the observer data if they become important.
+
+## Species Exclusion Criteria
+
+We do not want to remove too many species now (after all, the point of this analysis is to figure out which species are worth focusing on), but there are `r length(unique(dat_f3$species))` unique species in this dataset. Let's look at their percent contribution to the TOTAL landed weight across all observations.
+
+### Non-species
+
+Some of these are not species at all, but other categories (unidentified fish, rocks and mud, etc.). Let's filter these out. First, remove any species with "Unid" in the name, indicating unidentified species of some sort.
+
+```{r}
+dat_f3 %<>% 
+  filter(!grepl("Unid",species))
+```
+
+Filter out other, manually-identified non-species.
+
+```{r}
+dat_f3 %<>%
+  filter(!grepl("Garbage",species),
+         !grepl("Mixed Species",species),
+         !grepl("Decomposed Fish",species),
+         !grepl("Kelp Rocks Wood Mud",species))
+```
+
+After these filters, there are `r length(unique(dat_f3$species))` left in the dataset.
+
+### Catch Rank
+
+```{r}
+spp_ranks <- dat_f3 %>% 
+  # for now we group by common name- need to check the intricacies of the "SPID_EQV" identifier
+  group_by(species) %>% 
+  summarise(total_MT_thousands=sum(MT)/1e3) %>% 
+  ungroup() %>% 
+  mutate(prop_weight=total_MT_thousands/sum(total_MT_thousands)) %>% 
+  mutate(rnk=min_rank(desc(prop_weight)))
+```
+
+```{r,include=F}
+# species name-matching key
+# should come back to check this- it is a many-to-many match
+spp_names<-dat_f3 %>% 
+  distinct(SPID_EQV,species)
+```
+
+The top 25 species by weight in the entire dataset:
+
+```{r}
+spp_ranks %>% 
+  slice_max(order_by=desc(rnk),n=25) %>% 
+  arrange(rnk) %>% 
+  ggplot(aes(x=fct_reorder(species,rnk),y=log(total_MT_thousands)))+
+  geom_col()+
+  # scale_y_continuous(breaks=seq(0,10,by=2))+
+  labs(x="Species",y="Log Total Catch (Thousand MT)",title="Total Haul-level Catch Recorded in the Observer Data")+
+  theme_minimal()+
+  theme(axis.text.x = element_text(angle=45,vjust=1.2,hjust=1,size=8),
+        panel.grid.major = element_blank(),
+        panel.grid.minor=element_blank(),
+        axis.title.x = element_text(size=10),
+        axis.title.y=element_text(size=10))
+```
+
+And if we remove Pacific hake (whiting), as by far the most-represented species:
+
+```{r}
+spp_ranks %>% 
+  filter(rnk != 1) %>% 
+  slice_max(order_by=desc(rnk),n=25) %>% 
+  arrange(rnk) %>% 
+  ggplot(aes(x=fct_reorder(species,rnk),y=log(total_MT_thousands)))+
+  geom_col()+
+  # scale_y_continuous(breaks=seq(0,10,by=2))+
+  labs(x="Species",y="Log Total Catch (Thousand MT)",
+       title="Total Haul-level Catch Recorded in the Observer Data\n(Non-whiting)")+
+  theme_minimal()+ 
+  theme(axis.text.x = element_text(angle=45,vjust=1.2,hjust=1,size=8),
+        panel.grid.major = element_blank(),
+        panel.grid.minor=element_blank(),
+        axis.title.x = element_text(size=10),
+        axis.title.y=element_text(size=10))
+```
+
+How many species do we cut out if we make a cutoff at 1% of all landings? 0.1%?
+
+```{r}
+spp_one_percent <- spp_ranks %>% 
+  filter(prop_weight > 0.01) %>% 
+  distinct(species)
+
+spp_point1_percent <- spp_ranks %>% 
+  filter(prop_weight > 0.001) %>% 
+  distinct(species)
+```
+
+Turns out, making a cutoff at 1% of total, whole-dataset landings only leaves us with `r nrow(spp_one_percent)` species:
+
+```{r}
+spp_one_percent$species
+```
+
+If we make the cutoff 0.1%, there are `r nrow(spp_point1_percent)` species:
+
+```{r}
+spp_point1_percent$species
+```
+
+As a final exploration (for now), what about any species that represents greater than 1% by landed weight of *any recorded haul* (not just across the entire dataset)?
+
+```{r}
+spp_ranks_haul <- dat_f3 %>% 
+  # for now we group by common name- need to check the intricacies of the "SPID_EQV" identifier
+  group_by(HAUL_ID,species) %>% 
+  summarise(total_MT=sum(MT)) %>% 
+  ungroup() %>% 
+  group_by(HAUL_ID) %>% 
+  mutate(prop_weight_haul=total_MT/sum(total_MT)) %>% 
+  ungroup()
+```
+
+```{r}
+spp_haul_one_percent <- spp_ranks_haul %>% 
+  filter(prop_weight_haul > 0.01) %>% 
+  distinct(species)
+```
+
+This cutoff gives us `r nrow(spp_haul_one_percent)` species.
+
+## Cast Data to Wide Form
+
+```{r}
+# dat_wide <- dat_f3 %>% 
+#   # first, select only a subset of variables
+#   dplyr::select(HAUL_ID,SET_DATE,SET_LONG,SET_LAT,gear,sector,cs_sector,SPID_EQV,MT) %>% 
+#   # then, cast to wide-form
+```
+
