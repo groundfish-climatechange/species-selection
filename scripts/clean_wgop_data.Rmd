@@ -129,7 +129,7 @@ rm(dat,dat_f1,dat_f2)
 
 Finally, we want to organize the data such that it is prepared for cluster analysis. To do this, we alter the format from "long" to "wide" format, such that each row should have a unique haul ID, and the columns should indicate the catch of each species in that haul.
 
-For now, we only retain a small number of haul-level identifiers (Haul ID, date, lat/lon of set, gear type, sector). There should be `r length(unique(dat_f3$HAUL_id)` unique hauls.
+For now, we only retain a small number of haul-level identifiers (Haul ID, date, lat/lon of set, gear type, sector). There should be `r length(unique(dat_f3$HAUL_ID))` unique hauls.
 
 Later, we can pull other variables from the observer data if they become important.
 
