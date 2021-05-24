@@ -45,28 +45,25 @@ dat <- read_csv(here('data','wcgop_obproc_20210430.csv'),
                   AVG_DEPTH = "d",
                   AVG_LONG = 'd',
                   AVG_LAT = 'd',
-                  CATCH_CATEGORY_CODE = 'c',
-                  D_PORT = 'c',
-                  D_STATE = 'c',
+                  CATCH_DISPOSITION = 'c',
+                  DIS_MT = 'd',
                   DRVID = 'c',
-                  gear = 'c',
+                  VESSEL = 'c',
+                  GEAR_TYPE = 'c',
                   GF = 'l',
                   GROUPING = 'c',
-                  HAUL_ID = 'd',
+                  hake_sector = 'c',
+                  HAUL_ID = 'i',
                   IFQ = 'l',
-                  scientific_name = 'c',
-                  species= 'c',
-                  SET_YEAR = col_double(),
-                  SET_DATE = col_datetime(format = ""),
-                  SET_LAT = col_double(),
-                  SET_LONG = col_double(),
-                  SET_FISHING_AREA = col_double(),
-                  SET_DEPTH = col_double(),
+                  IFQ_GROUPING = 'c',
+                  RET_MT = 'd',
+                  scientific_name='c',
                   sector = 'c',
-                  cs_sector = 'c',
+                  SPECIES_CATEGORY_NAME= 'c',
+                  species='c',
+                  SET_DATE = col_datetime(format = ""),
                   TARGET = 'c',
-                  SRC = 'c',
-                  SPID_EQV= 'c',
+                  TRIP_ID = 'i',
                   MT = 'd'
                 ))
 ```
@@ -97,8 +94,8 @@ We filter out any records that are missing date, lat, or lon identifiers.
 ```{r}
 dat_f2 <- dat_f1 %>% 
   filter(!is.na(SET_DATE),
-         !is.na(SET_LONG),
-         !is.na(SET_LAT))
+         !is.na(AVG_LONG),
+         !is.na(AVG_LAT))
 ```
 
 Filtering out these records removes another `r nrow(dat_f1)-nrow(dat_f2)` observations, or `r (nrow(dat_f1)-nrow(dat_f2))/nrow(dat)*100` percent of the original data.
@@ -135,33 +132,34 @@ Later, we can pull other variables from the observer data if they become importa
 
 ## Species Exclusion Criteria
 
-We do not want to remove too many species now (after all, the point of this analysis is to figure out which species are worth focusing on), but there are `r length(unique(dat_f3$species))` unique species in this dataset. Let's look at their percent contribution to the TOTAL landed weight across all observations.
+We do not want to remove too many species now (after all, the point of this analysis is to figure out which species are worth focusing on), but there are `r length(unique(dat_f3$species))` unique species in this dataset. Here, we subset just to species in the Groundfish FMP, then look at each species' percent contribution to the TOTAL landed weight across all observations.
+
+
+### Groundfish FMP
+
+For the time being, select only species that appear in the groundfish Fishery Management Plan
+
+```{r}
+dat_gf <- dat_f3 %>% 
+  filter(GF)
+```
+
 
 ### Non-species
 
 Some of these are not species at all, but other categories (unidentified fish, rocks and mud, etc.). Let's filter these out. First, remove any species with "Unid" in the name, indicating unidentified species of some sort.
 
 ```{r}
-dat_f3 %<>% 
+dat_gf %<>% 
   filter(!grepl("Unid",species))
 ```
 
-Filter out other, manually-identified non-species.
-
-```{r}
-dat_f3 %<>%
-  filter(!grepl("Garbage",species),
-         !grepl("Mixed Species",species),
-         !grepl("Decomposed Fish",species),
-         !grepl("Kelp Rocks Wood Mud",species))
-```
-
-After these filters, there are `r length(unique(dat_f3$species))` left in the dataset.
+After these filters, there are `r length(unique(dat_gf$species))` left in the dataset.
 
 ### Catch Rank
 
 ```{r}
-spp_ranks <- dat_f3 %>% 
+spp_ranks <- dat_gf %>% 
   # for now we group by common name- need to check the intricacies of the "SPID_EQV" identifier
   group_by(species) %>% 
   summarise(total_MT_thousands=sum(MT)/1e3) %>% 
@@ -173,8 +171,8 @@ spp_ranks <- dat_f3 %>%
 ```{r,include=F}
 # species name-matching key
 # should come back to check this- it is a many-to-many match
-spp_names<-dat_f3 %>% 
-  distinct(SPID_EQV,species)
+# spp_names<-dat_gf %>% 
+#   distinct(SPID_EQV,species)
 ```
 
 The top 25 species by weight in the entire dataset:
@@ -242,7 +240,7 @@ spp_point1_percent$species
 As a final exploration (for now), what about any species that represents greater than 1% by landed weight of *any recorded haul* (not just across the entire dataset)?
 
 ```{r}
-spp_ranks_haul <- dat_f3 %>% 
+spp_ranks_haul <- dat_gf %>% 
   # for now we group by common name- need to check the intricacies of the "SPID_EQV" identifier
   group_by(HAUL_ID,species) %>% 
   summarise(total_MT=sum(MT)) %>% 
@@ -262,10 +260,47 @@ This cutoff gives us `r nrow(spp_haul_one_percent)` species.
 
 ## Cast Data to Wide Form
 
+I'm going to use (for now) the version of the data with the 0.1% cutoff.
+
+For this version of the data, in order to summarize across species, we need to remove variables that categorize the catches into smaller categories than the haul-level (for example, discarded vs. retained catch of the same species)
+
 ```{r}
-# dat_wide <- dat_f3 %>% 
-#   # first, select only a subset of variables
-#   dplyr::select(HAUL_ID,SET_DATE,SET_LONG,SET_LAT,gear,sector,cs_sector,SPID_EQV,MT) %>% 
-#   # then, cast to wide-form
+dat_wide <- dat_gf %>%
+  filter(species %in% spp_point1_percent$species) %>% 
+  # first, select only a subset of variables
+  dplyr::select(-DIS_MT,-RET_MT,-GF) %>%
+  group_by(HAUL_ID,sector,hake_sector,DRVID,VESSEL,TRIP_ID,AREA,AVG_LAT,AVG_LONG,AVG_DEPTH,
+           GEAR_TYPE,TARGET,SET_DATE,species) %>% 
+  # sum all catch per haul by species
+  summarise(MT=sum(MT)) %>% 
+  # then, cast to wide-form
+  group_by(HAUL_ID,sector,hake_sector,DRVID,VESSEL,TRIP_ID,AREA,AVG_LAT,AVG_LONG,AVG_DEPTH,
+           GEAR_TYPE,TARGET,SET_DATE) %>% 
+  arrange(species) %>% 
+  pivot_wider(names_from = "species",values_from="MT") %>% 
+  ungroup()
 ```
+
+```{r}
+# Fill in zeroes for no catch
+dat_wide %<>%
+  mutate(across(`Arrowtooth Flounder`:`Yellowtail Rockfish`,~replace(., is.na(.), 0)))
+```
+
+This gives us a unique row/observation for each separate `HAUL_ID`, with columns for the catch of each species.
+
+# Save
+
+Save this clean, thinned, filtered, and wide-form version of the data.
+
+```{r}
+write_rds(dat_wide,here('data','wcgop_wide.rds'))
+```
+
+And the final data ready for clustering looks something like this:
+
+```{r}
+glimpse(dat_wide)
+```
+
 
