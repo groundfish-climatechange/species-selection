@@ -1,0 +1,117 @@
+---
+title: "Groundfish Clustering"
+author: "Owen Liu"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(here)
+library(magrittr)
+library(NbClust)
+```
+
+```{r}
+# ggplot theme
+plot_theme <-   theme_minimal()+
+  theme(text=element_text(family="sans",size=10,color="black"),
+        legend.text = element_text(size=14),
+        axis.title=element_text(family="sans",size=14,color="black"),
+        axis.text=element_text(family="sans",size=8,color="black"),
+        panel.grid.major = element_line(color="gray50",linetype=3))
+theme_set(plot_theme)
+```
+
+# Purpose
+
+In this document we explore the grouping of groundfish species into clusters that are often caught together, according to the West Coast Groundfish Observer Program data.
+
+# Setup and Framework
+
+We use a version of the observed groundfish catch data that has been cleaned in a different script (`clean_wgop_data.Rmd`).
+
+```{r}
+dat <- read_rds(here('data','wcgop_wide.rds'))
+glimpse(dat)
+```
+
+This is "wide format" data, where each haul is represented on one row, and each potential species catch indicated across the columns. The data also include other important characteristics of each haul, like location, time, and gear type. The data also indicate different fleet sectors, which we will use as splits in our clustering data.
+
+```{r}
+unique(dat$sector)
+```
+
+We will form separate clusters for each sector.
+
+```{r}
+# split the data into a list of data frames, by sector
+sector_list <- dat %>% group_split(sector)
+
+# how many hauls/observations is each sector?
+dat %>% group_by(sector) %>% group_keys() %>% 
+  mutate(obs=purrr::map_int(sector_list,nrow)) %>% 
+  arrange(desc(obs))
+```
+
+# Co-Occurrence Matrices
+
+As a simple start, we calculate, for each species, the species it is most likely to be caught with. We start with a version of the data that is just presence/absence for now.
+
+```{r}
+# presence-absence
+dat_pa <- dat %>%
+  mutate(across(`Arrowtooth Flounder`:`Yellowtail Rockfish`,~ifelse(.x>0,1,0))) %>% 
+  select(HAUL_ID,`Arrowtooth Flounder`:`Yellowtail Rockfish`)
+spp <- names(dat) %>% tail(27)
+```
+
+```{r}
+# function to take a presence-absence dataset like the one above and calculate presence/absence
+calc_co <- function(df,species_list,plot=T){
+  dat_counts <- purrr::map_df(species_list,function(x){
+    summ <- df %>% 
+      filter(!!sym(x)==1) %>% 
+      summarise(across(-1,sum))
+    counts <- summ[1,] %>% as.integer()
+    counts <- counts/max(counts)
+    tibble(spp1=x,spp2=names(summ),p=counts)
+  })
+  if(plot){
+    co_plot <- dat_counts %>% 
+      ggplot(aes(spp1,spp2,fill=p))+
+      geom_tile()+
+      coord_equal()+
+      scale_fill_gradient2()+
+      labs(x="Captured Species",y="Co-Occurring Species",title="Species Co-Occurrence",fill="")+
+      theme(axis.text.x = element_text(angle=90,vjust=0.25,hjust=1))
+    return(co_plot)
+  } else(
+    return(dat_counts)
+  )
+}
+```
+
+## Visualize
+
+```{r}
+co_plot_all <- calc_co(dat_pa,spp)
+co_plot_all
+```
+
+
+# Do the Clusters
+
+```{r}
+dat_clust <- sector_list %>% 
+  pluck(4) %>% 
+  select(-(1:13)) %>% 
+  NbClust(method="ward.D2",min.nc = 2,max.nc=20,index='all')
+```
+
